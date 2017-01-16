@@ -1952,3 +1952,29 @@ func TestPreparePodArgs(t *testing.T) {
 		assert.Equal(t, testCase.cmd, cmd, fmt.Sprintf("Test case #%d", i))
 	}
 }
+
+func TestHostCreateDirectoriesByAnnotations(t *testing.T) {
+	testCases := []struct {
+		annotation map[string]string
+		expectCmd string
+	}{
+		{
+			map[string]string{
+				"rkt.kubernetes.io/host-create-directories": "/tmp/volume-0",
+			},
+			"/bin/mkdir -pv /tmp/volume-0",
+		},
+		{
+			map[string]string{
+				"rkt.kubernetes.io/host-create-directories": "/tmp/volume-0 /tmp/volume-1",
+			},
+			"/bin/mkdir -pv /tmp/volume-0 /tmp/volume-1",
+		},
+	}
+
+	for i, testCase := range testCases {
+		mkdir, _ := hostCreateDirectoriesByAnnotations(testCase.annotation)
+		cmd := newUnitOption("Service", "ExecStartPre", mkdir)
+		assert.Equal(t, testCase.expectCmd, cmd.Value, fmt.Sprintf("Test case #%d", i))
+	}
+}

@@ -104,6 +104,10 @@ const (
 	k8sRktStage1NameAnno = "rkt.alpha.kubernetes.io/stage1-name-override"
 	dockerPrefix         = "docker://"
 
+	// This annotation allows a k8s rkt runtime to create directories inside the Systemd with
+	// ExecStartPre=/bin/mkdir -pv content-of-the-annotation
+	k8sRktHostCreateDirectories = "rkt.kubernetes.io/host-create-directories"
+
 	authDir            = "auth.d"
 	dockerAuthTemplate = `{"rktKind":"dockerAuth","rktVersion":"v1","registries":[%q],"credentials":{"user":%q,"password":%q}}`
 
@@ -1108,6 +1112,15 @@ func (r *Runtime) getSelinuxContext(opt *v1.SELinuxOptions) (string, error) {
 	return strings.Join(ctx, ":"), nil
 }
 
+// Rkt doesn't create the directory if not existing
+// Use the annotations of the Pod to create an ExecStartPre=/bin/mkdir -pv [...]
+func hostCreateDirectoriesByAnnotations(annotations map[string]string) (string, bool) {
+	if val, ok := annotations[k8sRktHostCreateDirectories]; ok {
+		return "/bin/mkdir -pv " + val, true
+	}
+	return "", false
+}
+
 // preparePod will:
 //
 // 1. Invoke 'rkt prepare' to prepare the pod, and get the rkt pod uuid.
@@ -1179,6 +1192,10 @@ func (r *Runtime) preparePod(pod *v1.Pod, podIP string, pullSecrets []v1.Secret,
 		newUnitOption(unitKubernetesSection, unitPodName, pod.Name),
 		newUnitOption(unitKubernetesSection, unitPodNamespace, pod.Namespace),
 		newUnitOption(unitKubernetesSection, unitPodHostNetwork, fmt.Sprintf("%v", hostNetwork)),
+	}
+	// Volumes Handler
+	if mkdirCommand, ok := hostCreateDirectoriesByAnnotations(pod.Annotations); ok {
+		units = append(units, newUnitOption("Service", "ExecStartPre", mkdirCommand))
 	}
 
 	if pod.Spec.SecurityContext != nil && pod.Spec.SecurityContext.SELinuxOptions != nil {
