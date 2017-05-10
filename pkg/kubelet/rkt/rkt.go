@@ -184,7 +184,7 @@ type Runtime struct {
 	// requestTimeout is the timeout of rkt requests.
 	requestTimeout time.Duration
 
-	netns netNsGetter
+	unitGetter unitServiceGetter
 }
 
 // Field of the X-Kubernetes directive of a systemd service file
@@ -211,9 +211,10 @@ type cliInterface interface {
 	RunCommand(config *Config, args ...string) (result []string, err error)
 }
 
-// netNsGetter wrapps the systemd open files for testing purpose
-type netNsGetter interface {
-	fromRunningUnitFiles(kubetypes.UID, *rktapi.Pod) (kubecontainer.ContainerID, error)
+// unitServiceGetter wrapps the systemd open files for testing purpose
+type unitServiceGetter interface {
+	getKubernetesDirective(string) (podServiceDirective, error)
+	getNetworkNamespace(kubetypes.UID, *rktapi.Pod) (kubecontainer.ContainerID, error)
 }
 
 // New creates the rkt container runtime which implements the container runtime interface.
@@ -308,7 +309,7 @@ func New(
 	}
 
 	rkt.cli = rkt
-	rkt.netns = rkt
+	rkt.unitGetter = rkt
 
 	return rkt, nil
 }
@@ -1883,7 +1884,7 @@ func (r *Runtime) GetPodContainerID(pod *kubecontainer.Pod) (kubecontainer.Conta
 	return kubecontainer.ContainerID{ID: string(pod.ID)}, nil
 }
 
-func podDetailsFromServiceFile(serviceFilePath string) (podService podServiceDirective, err error) {
+func (r *Runtime) getKubernetesDirective(serviceFilePath string) (podService podServiceDirective, err error) {
 	f, err := os.Open(serviceFilePath)
 	if err != nil {
 		return podService, err
@@ -2041,7 +2042,7 @@ func (r *Runtime) GarbageCollect(gcPolicy kubecontainer.ContainerGCPolicy, allSo
 // Read kubernetes pod UUID, namespace, netns and name from systemd service file and
 // use that to clean up any pod network that may still exist.
 func (r *Runtime) cleanupPodNetworkFromServiceFile(serviceFilePath string) error {
-	podService, err := podDetailsFromServiceFile(serviceFilePath)
+	podService, err := r.getKubernetesDirective(serviceFilePath)
 	if err != nil {
 		return err
 	}
@@ -2057,14 +2058,15 @@ func (r *Runtime) cleanupPodNetworkFromServiceFile(serviceFilePath string) error
 	}, podService.networkNamespace)
 }
 
+// Remove the touched file created by ExecStartPost in the systemd service file
 func (r *Runtime) removeFinishedMarkerFile(serviceName string) error {
 	serviceFile := serviceFilePath(serviceName)
-	podDetail, err := podDetailsFromServiceFile(serviceFile)
+	podDetail, err := r.unitGetter.getKubernetesDirective(serviceFile)
 	if err != nil {
 		return err
 	}
-	pod := kubetypes.UID(podDetail.id)
-	finishedFile := podFinishedMarkerPath(r.runtimeHelper.GetPodDir(pod), getRktUUIDFromServiceFileName(serviceName))
+	podDir := r.runtimeHelper.GetPodDir(kubetypes.UID(podDetail.id))
+	finishedFile := podFinishedMarkerPath(podDir, getRktUUIDFromServiceFileName(serviceName))
 	return r.os.Remove(finishedFile)
 }
 
@@ -2097,7 +2099,7 @@ func (r *Runtime) cleanupByPodId(podID string) (errlist []error) {
 		glog.Warningf("rkt: Failed to reset the failed systemd service %q: %v", serviceName, err)
 	}
 	if err := r.removeFinishedMarkerFile(serviceName); err != nil {
-		glog.Warningf("rkt: Failed to remove finished file for unit %q", serviceName, err)
+		errlist = append(errlist, fmt.Errorf("rkt: Failed to remove finished file %q for unit %q: %v", serviceName, podID, err))
 	}
 	if err := r.os.Remove(serviceFile); err != nil {
 		errlist = append(errlist, fmt.Errorf("rkt: Failed to remove service file %q for pod %q: %v", serviceFile, podID, err))
@@ -2117,7 +2119,7 @@ func (r *Runtime) removePod(pod *rktapi.Pod) error {
 		errlist = append(errlist, fmt.Errorf("rkt: Failed to remove pod %q: %v", pod.Id, err))
 	}
 	if err := r.removeTerminationFiles(pod); err != nil {
-		glog.Warningf("rkt: Failed to clean up pod TerminationMessageFile %q: %v", pod.Id, err)
+		errlist = append(errlist, fmt.Errorf("rkt: Failed to clean up pod TerminationMessageFile %q: %v", pod.Id, err))
 	}
 
 	if _, err := r.cli.RunCommand(nil, "rm", pod.Id); err != nil {
@@ -2388,7 +2390,7 @@ func populateContainerStatus(pod rktapi.Pod, app rktapi.App, runtimeApp appcsche
 
 // from a running systemd unit, return the network namespace of a Pod
 // this field is inside the X-Kubernetes directive
-func (r *Runtime) fromRunningUnitFiles(uid kubetypes.UID, latestPod *rktapi.Pod) (networkNamespace kubecontainer.ContainerID, err error) {
+func (r *Runtime) getNetworkNamespace(uid kubetypes.UID, latestPod *rktapi.Pod) (networkNamespace kubecontainer.ContainerID, err error) {
 	serviceFiles, err := r.getPodSystemdServiceFiles()
 	if err != nil {
 		return networkNamespace, err
@@ -2397,7 +2399,7 @@ func (r *Runtime) fromRunningUnitFiles(uid kubetypes.UID, latestPod *rktapi.Pod)
 	for _, f := range serviceFiles {
 		fileName := f.Name()
 		if latestPod.Id == getRktUUIDFromServiceFileName(fileName) {
-			podService, err := podDetailsFromServiceFile(serviceFilePath(fileName))
+			podService, err := r.unitGetter.getKubernetesDirective(serviceFilePath(fileName))
 			if err != nil {
 				return networkNamespace, err
 			}
@@ -2477,7 +2479,7 @@ func (r *Runtime) GetPodStatus(uid kubetypes.UID, name, namespace string) (*kube
 		return podStatus, nil
 	}
 
-	networkNamespace, err := r.netns.fromRunningUnitFiles(uid, latestPod)
+	networkNamespace, err := r.unitGetter.getNetworkNamespace(uid, latestPod)
 	if err != nil {
 		glog.Warningf("networkNamespace: %v", err)
 	}
