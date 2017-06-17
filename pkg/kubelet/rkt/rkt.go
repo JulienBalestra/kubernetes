@@ -95,6 +95,8 @@ const (
 	k8sRktRestartCountAnno           = "rkt.kubernetes.io/restart-count"
 	k8sRktTerminationMessagePathAnno = "rkt.kubernetes.io/termination-message-path"
 
+	k8sRktLimitNoFileAnno = "systemd-unit-option.rkt.kubernetes.io/LimitNOFILE"
+
 	// TODO(euank): This has significant security concerns as a stage1 image is
 	// effectively root.
 	// Furthermore, this (using an annotation) is a hack to pass an extra
@@ -1148,6 +1150,24 @@ func constructSyslogIdentifier(generateName string, podName string) string {
 	return podName
 }
 
+// Setup additional systemd field specified in the Pod Annotation
+func setupSystemdCustomFields(annotations map[string]string, unitOptionArray *[]*unit.UnitOption) error {
+
+	// LimitNOFILE
+	if strSize := annotations[k8sRktLimitNoFileAnno]; strSize != "" {
+		size, err := strconv.Atoi(strSize)
+		if err != nil {
+			return err
+		}
+		if size < 1 {
+			return fmt.Errorf("invalid value for %s: %s", k8sRktLimitNoFileAnno, strSize)
+		}
+		*unitOptionArray = append(*unitOptionArray, newUnitOption("Service", "LimitNOFILE", strSize))
+	}
+
+	return nil
+}
+
 // preparePod will:
 //
 // 1. Invoke 'rkt prepare' to prepare the pod, and get the rkt pod uuid.
@@ -1233,6 +1253,11 @@ func (r *Runtime) preparePod(pod *v1.Pod, podIP string, pullSecrets []v1.Secret,
 			return "", nil, err
 		}
 		units = append(units, newUnitOption("Service", "SELinuxContext", selinuxContext))
+	}
+
+	err = setupSystemdCustomFields(pod.Annotations, &units)
+	if err != nil {
+		glog.Warningf("fail to add custom systemd fields provided by pod Annotations: %q", err)
 	}
 
 	serviceName := makePodServiceFileName(uuid)
