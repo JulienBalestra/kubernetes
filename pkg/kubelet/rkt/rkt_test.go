@@ -2078,7 +2078,6 @@ func TestGetPodSystemdServiceFiles(t *testing.T) {
 }
 
 func TestSetupSystemdCustomFields(t *testing.T) {
-
 	testCases := []struct {
 		unitOpts       []*unit.UnitOption
 		podAnnotations map[string]string
@@ -2116,12 +2115,12 @@ func TestSetupSystemdCustomFields(t *testing.T) {
 
 	for i, tt := range testCases {
 		raiseErr := false
-		err := setupSystemdCustomFields(tt.podAnnotations, &tt.unitOpts)
+		newUnitsOpts, err := setupSystemdCustomFields(tt.podAnnotations, tt.unitOpts)
 		if err != nil {
 			raiseErr = true
 		}
 		assert.Equal(t, tt.raiseErr, raiseErr, fmt.Sprintf("Test case #%d", i))
-		for _, opt := range tt.unitOpts {
+		for _, opt := range newUnitsOpts {
 			assert.Equal(t, "Service", opt.Section, fmt.Sprintf("Test case #%d", i))
 			assert.Contains(t, tt.expectedValues, opt.Value, fmt.Sprintf("Test case #%d", i))
 		}

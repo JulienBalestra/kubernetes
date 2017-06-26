@@ -1151,21 +1151,20 @@ func constructSyslogIdentifier(generateName string, podName string) string {
 }
 
 // Setup additional systemd field specified in the Pod Annotation
-func setupSystemdCustomFields(annotations map[string]string, unitOptionArray *[]*unit.UnitOption) error {
-
+func setupSystemdCustomFields(annotations map[string]string, unitOptionArray []*unit.UnitOption) ([]*unit.UnitOption, error) {
 	// LimitNOFILE
 	if strSize := annotations[k8sRktLimitNoFileAnno]; strSize != "" {
 		size, err := strconv.Atoi(strSize)
 		if err != nil {
-			return err
+			return unitOptionArray, err
 		}
 		if size < 1 {
-			return fmt.Errorf("invalid value for %s: %s", k8sRktLimitNoFileAnno, strSize)
+			return unitOptionArray, fmt.Errorf("invalid value for %s: %s", k8sRktLimitNoFileAnno, strSize)
 		}
-		*unitOptionArray = append(*unitOptionArray, newUnitOption("Service", "LimitNOFILE", strSize))
+		unitOptionArray = append(unitOptionArray, newUnitOption("Service", "LimitNOFILE", strSize))
 	}
 
-	return nil
+	return unitOptionArray, nil
 }
 
 // preparePod will:
@@ -1255,7 +1254,7 @@ func (r *Runtime) preparePod(pod *v1.Pod, podIP string, pullSecrets []v1.Secret,
 		units = append(units, newUnitOption("Service", "SELinuxContext", selinuxContext))
 	}
 
-	err = setupSystemdCustomFields(pod.Annotations, &units)
+	units, err = setupSystemdCustomFields(pod.Annotations, units)
 	if err != nil {
 		glog.Warningf("fail to add custom systemd fields provided by pod Annotations: %q", err)
 	}
