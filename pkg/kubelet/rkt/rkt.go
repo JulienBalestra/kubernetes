@@ -34,6 +34,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/JulienBalestra/netns/netns"
 	appcschema "github.com/appc/spec/schema"
 	appctypes "github.com/appc/spec/schema/types"
 	"github.com/coreos/go-systemd/unit"
@@ -310,6 +311,11 @@ func New(
 
 	rkt.cli = rkt
 	rkt.unitGetter = rkt
+
+	err = netns.InitNetworkNamespaceDirectory()
+	if err != nil {
+		return nil, err
+	}
 
 	return rkt, nil
 }
@@ -1315,7 +1321,7 @@ func (r *Runtime) setupPodNetwork(pod *v1.Pod) (kubecontainer.ContainerID, strin
 	glog.V(5).Infof("New network namespace %q generated for pod %s", networkNamespace.ID, format.Pod(pod))
 
 	// Create the network namespace for the pod
-	_, err := r.execer.Command("ip", "netns", "add", networkNamespace.ID).Output()
+	err := netns.CreateNetworkNamespaceInFork(networkNamespace.ID)
 	if err != nil {
 		return networkNamespace, "", fmt.Errorf("failed to create pod network namespace: %v", err)
 	}

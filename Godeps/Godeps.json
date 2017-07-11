@@ -87,6 +87,10 @@
 			"Rev": "d7c034a8af24eda120dd6460bfcd6d9ed14e43ca"
 		},
 		{
+			"ImportPath": "github.com/JulienBalestra/netns/netns",
+			"Rev": "e68599284ec320161251b4e1a4e8c2fc409c4ff0"
+		},
+		{
 			"ImportPath": "github.com/MakeNowJust/heredoc",
 			"Rev": "1d91351acdc1cb2f2c995864674b754134b86ca7"
 		},
