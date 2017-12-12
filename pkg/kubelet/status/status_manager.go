@@ -128,12 +128,36 @@ func isStatusEqual(oldStatus, status *v1.PodStatus) bool {
 	return apiequality.Semantic.DeepEqual(status, oldStatus)
 }
 
+// updateLocalPod update the kubelet pod in the podManager if this pod isn't from an apiserver
+// The common use-case is providing a manifest-path containing Pod resources to bootstrap the Master role
+func (m *manager) updateLocalPod(uid types.UID, status versionedPodStatus) {
+	pod, podOk := m.podManager.GetPodByUID(uid)
+	if !podOk {
+		return
+	}
+
+	podAnnotations := pod.GetAnnotations()
+	source, configSourceOk := podAnnotations[kubetypes.ConfigSourceAnnotationKey]
+	if !configSourceOk || source == "api" {
+		return
+	}
+	pod.Status = status.status
+	m.podManager.UpdatePod(pod)
+	glog.V(4).Infof("Internal status for pod %q updated successfully: (%d, %+v)", format.Pod(pod), status.version, status)
+}
+
 func (m *manager) Start() {
 	// Don't start the status manager if we don't have a client. This will happen
 	// on the master, where the kubelet is responsible for bootstrapping the pods
 	// of the master components.
 	if m.kubeClient == nil {
-		glog.Infof("Kubernetes client is nil, not starting status manager.")
+		glog.Infof("Kubernetes client is nil, sync pod status locally")
+		go wait.Forever(func() {
+			for {
+				syncRequest := <-m.podStatusChannel
+				m.updateLocalPod(syncRequest.podUID, syncRequest.status)
+			}
+		}, 0)
 		return
 	}
 
@@ -475,6 +499,7 @@ func (m *manager) syncPod(uid types.UID, status versionedPodStatus) {
 		return
 	}
 	pod = newPod
+	m.updateLocalPod(uid, status)
 
 	glog.V(3).Infof("Status for pod %q updated successfully: (%d, %+v)", format.Pod(pod), status.version, status.status)
 	m.apiStatusVersions[kubetypes.MirrorPodUID(pod.UID)] = status.version
