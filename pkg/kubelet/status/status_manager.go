@@ -129,14 +129,6 @@ func isStatusEqual(oldStatus, status *v1.PodStatus) bool {
 }
 
 func (m *manager) Start() {
-	// Don't start the status manager if we don't have a client. This will happen
-	// on the master, where the kubelet is responsible for bootstrapping the pods
-	// of the master components.
-	if m.kubeClient == nil {
-		glog.Infof("Kubernetes client is nil, not starting status manager.")
-		return
-	}
-
 	glog.Info("Starting to sync pod status with apiserver")
 	syncTicker := time.Tick(syncPeriod)
 	// syncPod and syncBatch share the same go routine to avoid sync races.
@@ -145,7 +137,26 @@ func (m *manager) Start() {
 		case syncRequest := <-m.podStatusChannel:
 			glog.V(5).Infof("Status Manager: syncing pod: %q, with status: (%d, %v) from podStatusChannel",
 				syncRequest.podUID, syncRequest.status.version, syncRequest.status.status)
-			m.syncPod(syncRequest.podUID, syncRequest.status)
+
+			// Need a client to sync the Pod with the apiserver
+			if m.kubeClient != nil {
+				m.syncPod(syncRequest.podUID, syncRequest.status)
+			}
+
+			// Update the kubelet pod in the podManager if this pod isn't from an apiserver
+			// The common use-case is providing a manifest-path containing Pod resources to bootstrap the Master role
+			pod, podOk := m.podManager.GetPodByUID(syncRequest.podUID)
+			if !podOk {
+				break
+			}
+			podAnnotations := pod.GetAnnotations()
+			source, configSourceOk := podAnnotations[kubetypes.ConfigSourceAnnotationKey]
+			if !configSourceOk || source == "api" {
+				break
+			}
+			pod.Status = syncRequest.status.status
+			m.podManager.UpdatePod(pod)
+			glog.V(4).Infof("Internal status for pod %q updated successfully: (%d, %+v)", format.Pod(pod), syncRequest.status.version, syncRequest.status)
 		case <-syncTicker:
 			m.syncBatch()
 		}
@@ -351,7 +362,7 @@ func (m *manager) updateStatusInternal(pod *v1.Pod, status v1.PodStatus, forceUp
 	// clobbering each other so the phase of a pod progresses monotonically.
 	if isCached && isStatusEqual(&cachedStatus.status, &status) && !forceUpdate {
 		glog.V(3).Infof("Ignoring same status for pod %q, status: %+v", format.Pod(pod), status)
-		return false // No new status.
+		//return false // No new status.
 	}
 
 	newStatus := versionedPodStatus{
